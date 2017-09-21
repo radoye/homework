@@ -26,7 +26,7 @@ def queryExpert(args):
     expert_policy = load_policy.load_policy(args.expert_policy_file)
     print('loaded and built')
 
-    queryPolicy(args, expert_policy)
+    return queryPolicy(args, expert_policy)
 
 
 def queryPolicy(args, policy_fn):
@@ -67,7 +67,7 @@ def queryPolicy(args, policy_fn):
         expert_data = {'observations': np.array(observations),
                        'actions': np.array(actions)}
 
-    return expert_data
+        return expert_data
     
 
 def parseInput():
@@ -99,7 +99,7 @@ def activation_size(tsr):
     else:
         return int(s[1])
 
-def mk_full(name, input, out_size):
+def mk_fcl(name, input, out_size):
     """Expects only simple vectors as input layers, not multi-dim tensors."""
     with tf.name_scope(name):
         ws = tf.Variable(
@@ -119,14 +119,32 @@ def nn(dim_lst):
     """
 
     lyr = tf.placeholder(tf.float32, shape=(None, dim_lst[0]))
+    inp = lyr
 
     i = 1
     for lyr_dim in dim_lst[1:]:
-        lyr = mk_full('full' + str(i), lyr, lyr_dim)
+        lyr = mk_fcl('full' + str(i), lyr, lyr_dim)
         i += 1
 
-    return lyr
-        
+    return (inp, lyr)
+
+def add_loss(nn_out):
+    size = activation_size(nn_out)
+
+    ref = tf.placeholder(tf.float32, shape=(None, size))
+
+    loss = tf.losses.mean_squared_error(labels=ref, predictions=nn_out)
+
+    return (ref, loss)
+
+def add_train(loss, learning_rate):
+
+    tf.summary.scalar('loss', loss)
+
+    optimizer = tf.train.GradientDescentOptimizer(learning_rate)
+    global_step = tf.Variable(0, name='global_step', trainable=False)
+    train_op = optimizer.minimize(loss, global_step=global_step)
+    return train_op
     
 
 ###########################################################################
@@ -139,7 +157,12 @@ if __name__ == '__main__':
     expert_data = queryExpert(args)
 
     # define the network
-    cnet = nn([10,128,10])
+    o_size = expert_data['observations'][0].size
+    a_size = expert_data['actions'][0].size
+
+    (cnet_in, cnet_out) = nn([o_size,256,256,a_size])
+    (ref, loss) = add_loss(cnet_out)
+    top = add_train(loss, 1e-3)
 
     # cloning
     ipy.embed()
