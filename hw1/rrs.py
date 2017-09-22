@@ -17,19 +17,23 @@ import gym
 import load_policy
 
 import math
+import random as rnd
 
 # for dropping into the repl
 import IPython as ipy
 
-def queryExpert(args):
+def exerciseExpert(args):
     print('loading and building expert policy')
     expert_policy = load_policy.load_policy(args.expert_policy_file)
     print('loaded and built')
 
-    return queryPolicy(args, expert_policy)
+    return exercisePolicy(args, expert_policy)
 
 
-def queryPolicy(args, policy_fn):
+# TODO: split this into
+#         exercisePolicy: [observation] -> [action]
+#         genPath: () -> ([observation], [action])
+def exercisePolicy(args, policy_fn):
     with tf.Session():
         tf_util.initialize()
 
@@ -47,7 +51,7 @@ def queryPolicy(args, policy_fn):
             totalr = 0.
             steps = 0
             while not done:
-                action = policy_fn(obs[None,:])
+                action = policy_fn(obs[None,:]).flatten()
                 observations.append(obs)
                 actions.append(action)
                 obs, r, done, _ = env.step(action)
@@ -124,6 +128,7 @@ def nn(dim_lst):
     i = 1
     for lyr_dim in dim_lst[1:]:
         lyr = mk_fcl('full' + str(i), lyr, lyr_dim)
+        lyr = tf.nn.relu(lyr)
         i += 1
 
     return (inp, lyr)
@@ -137,16 +142,85 @@ def add_loss(nn_out):
 
     return (ref, loss)
 
-def add_train(loss, learning_rate):
+def add_train(loss, learning_rate, lr_step=100000, lr_drop=0.2):
 
     tf.summary.scalar('loss', loss)
 
-    optimizer = tf.train.GradientDescentOptimizer(learning_rate)
     global_step = tf.Variable(0, name='global_step', trainable=False)
+
+    starter_learning_rate = learning_rate
+    lr = tf.train.exponential_decay(starter_learning_rate, global_step,
+                                    lr_step, lr_drop, staircase=True)
+    tf.summary.scalar('lr', lr)
+    # Passing global_step to minimize() will increment it at each step.
+    optimizer = tf.train.GradientDescentOptimizer(learning_rate)
     train_op = optimizer.minimize(loss, global_step=global_step)
+
     return train_op
     
+###########################################################################
+##
+## training
+##
 
+
+def split_shuffle(data, valid_frac):
+    o = data['observations']
+    a = data['actions']
+
+    idx = list(range(len(o))) # should be len(o) = len(a)!
+    rnd.shuffle(idx)
+
+    brake = int(valid_frac * len(idx))
+
+    valid_idx = idx[:brake]
+    train_idx = idx[brake:]
+
+    return ((o[valid_idx], a[valid_idx]), (o[train_idx], a[train_idx]))
+
+def validate(net, valid):
+    raise NotImplementedError
+    
+def train(data, steps, net_ops, valid_frac=0.1, batch=64):
+
+    (top, ref, loss, cnet_in, cnet_out) = net_ops
+
+    oa_valid, (o_train, a_train) = split_shuffle(data, valid_frac)
+
+    print("training {} epochs".format(steps*batch / len(o_train)))
+
+    with tf.Session() as sess:
+
+        merged = tf.summary.merge_all()
+        train_writer = tf.summary.FileWriter('./train', sess.graph)
+        tf.initialize_all_variables().run()
+
+        for cnt in range(steps):
+
+            offset = (cnt*batch) % (a_train.shape[0] - batch)
+            obs = o_train[offset:offset+batch]
+            act = a_train[offset:offset+batch]
+            feed = {cnet_in: obs, ref: act}
+
+            _, m, l = sess.run([top, merged, loss], feed_dict = feed)
+
+            if (cnt % 250 == 0):
+                print("[{}] loss: {}".format(cnt, l))
+                train_writer.add_summary(m, cnt)
+
+        # validate
+            
+
+def cloner(net_ops):
+    (top, ref, loss, cnet_in, cnet_out) = net_ops
+
+    policy_fn = tf_util.function([cnet_in], cnet_out)
+
+    return policy_fn
+
+        # is dynamic context going to work here?
+        
+    
 ###########################################################################
 ##
 ## command line
@@ -154,17 +228,27 @@ def add_train(loss, learning_rate):
 
 if __name__ == '__main__':
     args = parseInput()
-    expert_data = queryExpert(args)
+    expert_data = exerciseExpert(args)
+
+    #ipy.embed()
 
     # define the network
     o_size = expert_data['observations'][0].size
     a_size = expert_data['actions'][0].size
 
-    (cnet_in, cnet_out) = nn([o_size,256,256,a_size])
+    (cnet_in, cnet_out) = nn([o_size,512,1024,512,a_size])
     (ref, loss) = add_loss(cnet_out)
-    top = add_train(loss, 1e-3)
+    top = add_train(loss, 0.01)
+
+    net_ops = (top, ref, loss, cnet_in, cnet_out)
 
     # cloning
-    ipy.embed()
+    train(expert_data, 500000, net_ops)
+
+    clone_policy = cloner(net_ops)
+
+    clone_data = exercisePolicy(args, clone_policy)
+
+    # test execution
 
     # dagger
