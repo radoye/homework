@@ -7,12 +7,13 @@ rrs@numericcal
 
 Example usage:
 
-    python rrs.py experts/Humanoid-v1.pkl Humanoid-v1 --render --num_rollouts 10 --dagger_rounds 50
+    python rrs.py experts/Humanoid-v1.pkl Humanoid-v1 --render --num_rollouts 5 --dagger_rounds 50
 
 Author of the original script and included expert policies: Jonathan Ho (hoj@openai.com)
 
 Environment setup instruction and problem statement: http://rll.berkeley.edu/deeprlcourse/f17docs/hw1fall2017.pdf
 Class website: http://rll.berkeley.edu/deeprlcourse/
+Lectures for this exercise: Aug 23 / Aug 28
 """
 
 import pickle
@@ -276,11 +277,6 @@ def train(sess, data, steps, net, valid_frac=0.1, batch=256):
             print("[{}] loss: {}".format(cnt, l))
             train_writer.add_summary(m, cnt)
 
-        # validate
-        #(a, r) = queryPolicy(oa_valid, cloner(net_ops))
-        #plt.plot(a, 'r-', r, 'b-')
-        #plt.pause(5)
-   
 ###########################################################################
 ##
 ## command line
@@ -319,19 +315,21 @@ if __name__ == '__main__':
         clone_data = runClone(sess, args, net)
     
         # dagger
+        # LECTURE: https://youtu.be/C_LGsoe36I8?list=PLkFD6_40KJIznC9CDbVTjAF2oyt8_VAe3&t=1653
         # NOTE: you can watch how the robot gets better through dagger
-        #         - it tries and fails, but records the state samples
-        #         - the expert policy provides feedback on what SHOULD HAVE happened in those states
-        #         - we retrain using the augmented set of expert samples
+        #         - it tries and fails, but records the actual (under clone policy) state samples
+        #         - the expert policy provides instruction on what SHOULD HAVE BEEN done in those states
+        #         - we retrain the clone policy using the augmented set of expert samples
 
         dagger_data = merge(expert_data, clone_data)
         
         for itr in range(args.dagger_rounds):
             clone_obs = clone_data['observations']              # the observed trajectory using clone policy
             print("[DAGGER] adding {} samples".format(len(clone_obs)))
-            query_data = queryExpert(args, clone_obs)  # the expert policy comment on the observed trajectory
-            dagger_data = merge(expert_data, query_data)
+            query_data = queryExpert(args, clone_obs)    # step 3 in the lecture
+            dagger_data = merge(expert_data, query_data) # step 4 in the lecture
         
-            train(sess, dagger_data, 50000, net)
-            clone_data = runClone(sess, args, net)
+            train(sess, dagger_data, 50000, net)         # step 1' (step 1 from the lecture before the loop)
+            clone_data = runClone(sess, args, net)       # step 2 in the lecture
+
 
