@@ -7,7 +7,7 @@ rrs@numericcal
 
 Example usage:
 
-    python rrs.py experts/Humanoid-v1.pkl Humanoid-v1 --render --num_rollouts 10
+    python rrs.py experts/Humanoid-v1.pkl Humanoid-v1 --render --num_rollouts 10 --dagger_rounds 50
 
 Author of the original script and included expert policies: Jonathan Ho (hoj@openai.com)
 
