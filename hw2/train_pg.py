@@ -12,6 +12,9 @@ from multiprocessing import Process
 # Utilities
 #============================================================================================#
 
+def report(tag, tsr):
+    print("[{}] {} : {}".format(tag, tsr.name, tsr.get_shape()))
+
 def build_mlp(
         input_placeholder, 
         output_size,
@@ -31,15 +34,24 @@ def build_mlp(
     # The output layer should have size 'output_size' and activation 'output_activation'.
     #
     # Hint: use tf.layers.dense
+    #
+    # NOTE: interestingly, nothing about the return
+    #       probably the output tensor (judging from the way this is used further down)
     #========================================================================================#
 
+    # |!| hope for call by value semantics
+    lyr = input_placeholder
     with tf.variable_scope(scope):
-        # YOUR_CODE_HERE
-        pass
+        for _ in range(n_layers):
+            lyr = tf.layers.dense(lyr, size, activation=activation)
 
+        lyr = tf.layers.dense(lyr, output_size, activation=output_activation) 
+
+    return lyr
+
+            
 def pathlength(path):
     return len(path["reward"])
-
 
 
 #============================================================================================#
@@ -119,11 +131,17 @@ def train_PG(exp_name='',
     sy_ob_no = tf.placeholder(shape=[None, ob_dim], name="ob", dtype=tf.float32)
     if discrete:
         sy_ac_na = tf.placeholder(shape=[None], name="ac", dtype=tf.int32) 
+        # WARN: why is it not [None, ac_dim]? this violates the convention _na above!
     else:
         sy_ac_na = tf.placeholder(shape=[None, ac_dim], name="ac", dtype=tf.float32) 
 
     # Define a placeholder for advantages
-    sy_adv_n = TODO
+    # WARN: why is the above example discriminating on discrete/non-discrete
+    #       given that /at_dim/ already gets set accordingly?
+    if discrete:
+        sy_adv_n = tf.placeholder(shape=[None], name="adv", dtype=tf.float32)
+    else:
+        sy_adv_n = tf.placeholder(shape=[None, ac_dim], name="adv", dtype=tf.float32)
 
 
     #========================================================================================#
@@ -167,27 +185,49 @@ def train_PG(exp_name='',
 
     if discrete:
         # YOUR_CODE_HERE
-        sy_logits_na = TODO
-        sy_sampled_ac = TODO # Hint: Use the tf.multinomial op
-        sy_logprob_n = TODO
+        print("discrete case [ac_dim = {}]".format(ac_dim))
+
+        # our network proposes play probabilities
+        sy_logits_na = build_mlp(sy_ob_no, ac_dim, "policy_d")
+        report("sy_logits_na", sy_logits_na)
+
+        # we select a control from the play probabilities
+        # Hint: Use the tf.multinomial op
+        sy_sampled_ac = tf.squeeze(tf.multinomial(sy_logits_na, 1), [1]) 
+        report("sy_sampled_ac", sy_sampled_ac)
+
+        # but now we must calculate based on what the sim actually performed
+        # as suggesting an action does not mean it will get performed |!|
+        #
+        # what a #!@$
+        sy_idx_na = tf.one_hot(sy_sampled_ac, depth=ac_dim,
+                               dtype=tf.bool, on_value=True, off_value=False)
+        report("sy_idx_na", sy_idx_na)
+        sy_logprob_n = tf.boolean_mask(sy_logits_na, sy_idx_na)
+        report("sy_logprob_n", sy_logprob_n)
 
     else:
         # YOUR_CODE_HERE
-        sy_mean = TODO
-        sy_logstd = TODO # logstd should just be a trainable variable, not a network output.
-        sy_sampled_ac = TODO
-        sy_logprob_n = TODO  # Hint: Use the log probability under a multivariate gaussian. 
 
+        sy_mean = build_mlp(sy_ob_no, [1], "policy_c")
+        # logstd should just be a trainable variable not a network output.
+        sy_logstd = tf.get_variable("logstd", [], dtype=tf.float32)
+        sy_sampled_ac = tf.random_normal([None, ac_dim], sy_mean, tf.exp(sy_logstd))
+        sy_logprob_n = TODO  # Hint: Use the log probability under a multivariate gaussian. 
 
 
     #========================================================================================#
     #                           ----------SECTION 4----------
     # Loss Function and Training Operation
+    #
+    # NOTE: it's super confusing to have this here ...
+    #       given that q_n and adv_n is calculated after the rollouts!
+    #       that's where the _adv_ stuff comes from!
     #========================================================================================#
 
-    loss = TODO # Loss function that we'll differentiate to get the policy gradient.
+    # Loss function that we'll differentiate to get the policy gradient.
+    loss = tf.reduce_mean(tf.multiply(sy_logprob_n, sy_adv_n)) # where does _adv_ come from?
     update_op = tf.train.AdamOptimizer(learning_rate).minimize(loss)
-
 
     #========================================================================================#
     #                           ----------SECTION 5----------
@@ -206,7 +246,6 @@ def train_PG(exp_name='',
         # YOUR_CODE_HERE
         baseline_update_op = TODO
 
-
     #========================================================================================#
     # Tensorflow Engineering: Config, Session, Variable initialization
     #========================================================================================#
@@ -217,8 +256,6 @@ def train_PG(exp_name='',
     sess.__enter__() # equivalent to `with sess:`
     tf.global_variables_initializer().run() #pylint: disable=E1101
 
-
-
     #========================================================================================#
     # Training Loop
     #========================================================================================#
@@ -228,6 +265,14 @@ def train_PG(exp_name='',
     for itr in range(n_iter):
         print("********** Iteration %i ************"%itr)
 
+        # NOTE: This (the whole thing, actually) is a pretty messy.
+        #       I'm also lazy to check stuff that should be obvious.
+        #       Assuming that this training loop is STEPPING through
+        #       the simulation by sending 'sy_ob_no' imputs one at
+        #       a time, getting results from the policy + sampling
+        #       and then applying that by extracting the number with
+        #       ac[0] ... something along those lines
+        
         # Collect paths until we have enough timesteps
         timesteps_this_batch = 0
         paths = []
@@ -242,7 +287,7 @@ def train_PG(exp_name='',
                     time.sleep(0.05)
                 obs.append(ob)
                 ac = sess.run(sy_sampled_ac, feed_dict={sy_ob_no : ob[None]})
-                ac = ac[0]
+                ac = ac[0] 
                 acs.append(ac)
                 ob, rew, done, _ = env.step(ac)
                 rewards.append(rew)
@@ -317,7 +362,30 @@ def train_PG(exp_name='',
         #====================================================================================#
 
         # YOUR_CODE_HERE
-        q_n = TODO
+
+        # this is a numeric (numpy) computation (no sym_ prefix)
+        if reward_to_go == False:
+            q_n = np.array([])
+            for path in paths:
+                tau = path["reward"]
+                # calculate rewards at each time step
+                tau_len = len(tau)
+                gpow = np.power(gamma, range(tau_len))
+                tau_rew = np.sum(np.multiply(gpow,tau))
+                tau_rews = np.array([tau_rew]*tau_len)
+
+                # append
+                q_n = np.append(q_n, tau_rews)
+        else:
+            q_n = np.array([])
+            for path in paths:
+                tau = path["reward"]
+                # calculate rewards at each time step
+                gpow = np.power(gamma, range(len(tau)))
+                tau_rews = np.fliplr(np.cumsum(np.fliplr(np.multiply(tau,gpow))))
+
+                # append
+                q_n = np.append(q_n, tau_rews)
 
         #====================================================================================#
         #                           ----------SECTION 5----------
@@ -380,6 +448,8 @@ def train_PG(exp_name='',
         # and after an update, and then log them below. 
 
         # YOUR_CODE_HERE
+
+        # finally we can train the policy network
 
 
         # Log diagnostics
