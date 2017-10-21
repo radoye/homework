@@ -136,8 +136,6 @@ def train_PG(exp_name='',
         sy_ac_na = tf.placeholder(shape=[None, ac_dim], name="ac", dtype=tf.float32) 
 
     # Define a placeholder for advantages
-    # WARN: why is the above example discriminating on discrete/non-discrete
-    #       given that /at_dim/ already gets set accordingly?
     if discrete:
         sy_adv_n = tf.placeholder(shape=[None], name="adv", dtype=tf.float32)
     else:
@@ -187,24 +185,33 @@ def train_PG(exp_name='',
         # YOUR_CODE_HERE
         print("discrete case [ac_dim = {}]".format(ac_dim))
 
-        # our network proposes play probabilities
-        sy_logits_na = build_mlp(sy_ob_no, ac_dim, "policy_d")
+        # the code below is used in policy update
+        
+        # (1)
+        # our network proposes log probabilities
+        sy_logits_na = build_mlp(sy_ob_no, ac_dim, "policy_d", size=32, n_layers=3)
         report("sy_logits_na", sy_logits_na)
 
+        # (3)
+        # now we must calculate based on what the sim actually performed
+        # as suggesting an action does not mean it will get performed 
+        #
+        # WARN: we implicitly assume that when sy_logprob_n is used, sy_logits_na is called with
+        #       the appropriatelly sized input (essentially with all the actions in the rollout)
+        sy_idx_na = tf.one_hot(sy_ac_na, depth=ac_dim, dtype=tf.float32, on_value=1.0, off_value=0.0)
+        report("sy_idx_na", sy_idx_na)
+        sy_logprob_n = tf.nn.softmax_cross_entropy_with_logits(labels=sy_idx_na, logits=sy_logits_na) 
+        report("sy_logprob_n", sy_logprob_n)
+
+        # the code below is used in simulation stepping
+
+        # (2)
         # we select a control from the play probabilities
         # Hint: Use the tf.multinomial op
-        sy_sampled_ac = tf.squeeze(tf.multinomial(sy_logits_na, 1), [1]) 
-        report("sy_sampled_ac", sy_sampled_ac)
-
-        # but now we must calculate based on what the sim actually performed
-        # as suggesting an action does not mean it will get performed |!|
         #
-        # what a #!@$
-        sy_idx_na = tf.one_hot(sy_sampled_ac, depth=ac_dim,
-                               dtype=tf.bool, on_value=True, off_value=False)
-        report("sy_idx_na", sy_idx_na)
-        sy_logprob_n = tf.boolean_mask(sy_logits_na, sy_idx_na)
-        report("sy_logprob_n", sy_logprob_n)
+        # WARN: implicitly we assume that when this is called the sy_logits_na is called with n = 1
+        sy_sampled_ac = tf.squeeze(tf.multinomial(sy_logits_na, num_samples=1), [1]) 
+        report("sy_sampled_ac", sy_sampled_ac)
 
     else:
         # YOUR_CODE_HERE
@@ -226,7 +233,10 @@ def train_PG(exp_name='',
     #========================================================================================#
 
     # Loss function that we'll differentiate to get the policy gradient.
-    loss = tf.reduce_mean(tf.multiply(sy_logprob_n, sy_adv_n)) # where does _adv_ come from?
+    sy_wght_neg_likelihood = tf.multiply(sy_logprob_n, sy_adv_n)
+    report("sy_wght_neg_likelihood", sy_wght_neg_likelihood)
+    loss = tf.reduce_mean(sy_wght_neg_likelihood) 
+    report("loss", loss)
     update_op = tf.train.AdamOptimizer(learning_rate).minimize(loss)
 
     #========================================================================================#
@@ -365,6 +375,7 @@ def train_PG(exp_name='',
 
         # this is a numeric (numpy) computation (no sym_ prefix)
         if reward_to_go == False:
+            print(">>>>> reward_to_go == False")
             q_n = np.array([])
             for path in paths:
                 tau = path["reward"]
@@ -377,12 +388,13 @@ def train_PG(exp_name='',
                 # append
                 q_n = np.append(q_n, tau_rews)
         else:
+            print(">>>>> reward_to_go == True")
             q_n = np.array([])
             for path in paths:
                 tau = path["reward"]
                 # calculate rewards at each time step
                 gpow = np.power(gamma, range(len(tau)))
-                tau_rews = np.fliplr(np.cumsum(np.fliplr(np.multiply(tau,gpow))))
+                tau_rews = np.flip(np.cumsum(np.flip(np.multiply(tau,gpow), 0)), 0)
 
                 # append
                 q_n = np.append(q_n, tau_rews)
@@ -415,7 +427,7 @@ def train_PG(exp_name='',
             # On the next line, implement a trick which is known empirically to reduce variance
             # in policy gradient methods: normalize adv_n to have mean zero and std=1. 
             # YOUR_CODE_HERE
-            pass
+            adv_n = (adv_n - np.mean(adv_n)) / np.std(adv_n)
 
 
         #====================================================================================#
@@ -450,6 +462,15 @@ def train_PG(exp_name='',
         # YOUR_CODE_HERE
 
         # finally we can train the policy network
+        #pts = 4000
+        #for tstep in range(pts):
+        feed = {sy_ob_no: ob_no, sy_ac_na: ac_na, sy_adv_n: adv_n}
+        old_loss = sess.run([loss], feed_dict = feed)[0]
+        _, new_loss = sess.run([update_op, loss], feed_dict = feed)
+
+            #if (tstep % (pts // 10) == 0):
+            #    print("[{}] loss: {}".format(tstep, new_loss))
+
 
 
         # Log diagnostics
@@ -465,6 +486,8 @@ def train_PG(exp_name='',
         logz.log_tabular("EpLenStd", np.std(ep_lengths))
         logz.log_tabular("TimestepsThisBatch", timesteps_this_batch)
         logz.log_tabular("TimestepsSoFar", total_timesteps)
+        logz.log_tabular("Loss BEFORE", old_loss)
+        logz.log_tabular("Loss AFTER", new_loss)
         logz.dump_tabular()
         logz.pickle_tf_vars()
 
