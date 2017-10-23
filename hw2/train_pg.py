@@ -139,7 +139,7 @@ def train_PG(exp_name='',
     if discrete:
         sy_adv_n = tf.placeholder(shape=[None], name="adv", dtype=tf.float32)
     else:
-        sy_adv_n = tf.placeholder(shape=[None, ac_dim], name="adv", dtype=tf.float32)
+        sy_adv_n = tf.placeholder(shape=[None], name="adv", dtype=tf.float32)
 
 
     #========================================================================================#
@@ -216,12 +216,20 @@ def train_PG(exp_name='',
     else:
         # YOUR_CODE_HERE
 
-        sy_mean = build_mlp(sy_ob_no, [1], "policy_c")
-        # logstd should just be a trainable variable not a network output.
-        sy_logstd = tf.get_variable("logstd", [], dtype=tf.float32)
-        sy_sampled_ac = tf.random_normal([None, ac_dim], sy_mean, tf.exp(sy_logstd))
-        sy_logprob_n = TODO  # Hint: Use the log probability under a multivariate gaussian. 
+        # 20th minute in the lecture:
+        # https://www.youtube.com/watch?v=tWNpiNzWuO8&index=4&list=PLkFD6_40KJIznC9CDbVTjAF2oyt8_VAe3
 
+        sy_mean = build_mlp(sy_ob_no, ac_dim, "policy_c", size=64, n_layers=4)
+        report("sy_mean", sy_mean)
+        # logstd should just be a trainable variable not a network output.
+        sy_logstd = tf.get_variable("sy_logstd", shape=[], dtype=tf.float32)
+        sy_sampled_ac = tf.random_normal([ac_dim], sy_mean, tf.exp(sy_logstd))
+        report("sy_sampled_ac", sy_sampled_ac)
+        # Hint: Use the log probability under a multivariate gaussian. 
+        sy_diff_n = sy_ac_na - sy_mean
+        report("sy_diff_n", sy_diff_n)
+        sy_logprob_n = tf.exp(sy_logstd) * tf.squeeze(tf.square(sy_diff_n))
+        report("sy_logprob_n", sy_logprob_n)
 
     #========================================================================================#
     #                           ----------SECTION 4----------
@@ -462,15 +470,12 @@ def train_PG(exp_name='',
         # YOUR_CODE_HERE
 
         # finally we can train the policy network
-        #pts = 4000
-        #for tstep in range(pts):
         feed = {sy_ob_no: ob_no, sy_ac_na: ac_na, sy_adv_n: adv_n}
         old_loss = sess.run([loss], feed_dict = feed)[0]
         _, new_loss = sess.run([update_op, loss], feed_dict = feed)
 
-            #if (tstep % (pts // 10) == 0):
-            #    print("[{}] loss: {}".format(tstep, new_loss))
-
+        # debugging
+        #adv, diff, logprob = sess.run([sy_adv_n, sy_diff_n, sy_logprob_n], feed_dict = feed)
 
 
         # Log diagnostics
@@ -490,6 +495,10 @@ def train_PG(exp_name='',
         logz.log_tabular("Loss AFTER", new_loss)
         logz.dump_tabular()
         logz.pickle_tf_vars()
+        #print("[DIFF: {}] {}".format(diff.shape, diff))
+        #print("[LOGPROB: {}] {}".format(logprob.shape, logprob))
+        #print("[ADV: {}] {}".format(adv.shape, adv))
+        #print("[XYZ] {}".format(np.mean(np.dot(logprob,adv))))
 
 
 def main():
