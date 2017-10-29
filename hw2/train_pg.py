@@ -30,6 +30,10 @@ def rtg(rs, gamma=1.0):
     for r in rs:
         vals = np.append(vals, flip(np.cumsum(flip(np.multiply(r, discounts(len(r), gamma))))))
     return np.array(vals).flatten()
+
+def scale(arr, mu = 0.0, sigma = 1.0):
+    arr_ = (arr - np.mean(arr)) / np.std(arr) # N(0,1)
+    return mu + sigma * arr_
     
 
 def build_mlp(
@@ -291,7 +295,10 @@ def train_PG(exp_name='',
 
         # minute 20 in the lecture
         # https://www.youtube.com/watch?v=PpVhtJn-iZI&t=1223s&index=5&list=PLkFD6_40KJIznC9CDbVTjAF2oyt8_VAe3
-        baseline_update_op = TODO
+        sy_b_target = tf.placeholder(shape=[None], name="target", dtype=tf.float32)
+        b_loss = tf.losses.mean_squared_error(labels=sy_b_target, predictions=baseline_prediction)
+        b_lr = 2e-3
+        baseline_update_op = tf.train.AdamOptimizer(b_lr).minimize(b_loss)
 
     #========================================================================================#
     # Tensorflow Engineering: Config, Session, Variable initialization
@@ -447,8 +454,13 @@ def train_PG(exp_name='',
             # (mean and std) of the current or previous batch of Q-values. (Goes with Hint
             # #bl2 below.)
 
-            b_n = TODO
+            b_feed = {sy_ob_no: ob_no} 
+            b_n_ = sess.run([baseline_prediction], feed_dict = b_feed)[0]
+            print("b_n_ {}".format(b_n_.shape))
+            b_n = scale(b_n_, np.mean(q_n), np.std(q_n))
+            print("b_n {}".format(b_n.shape))
             adv_n = q_n - b_n
+            # note that b_n(s) while q_n(s,a) so the network will be averaging over the actions!
         else:
             adv_n = q_n.copy()
 
@@ -480,7 +492,14 @@ def train_PG(exp_name='',
             # targets to have mean zero and std=1. (Goes with Hint #bl1 above.)
 
             # YOUR_CODE_HERE
-            pass
+            b_train_feed = {sy_ob_no: ob_no, sy_b_target: scale(q_n)}
+            ilb = 100
+            for i_ in range(ilb):
+               bl, _ = sess.run([b_loss, baseline_update_op], feed_dict=b_train_feed)
+
+               if (i_ % (ilb // 10) == 0):
+                   print("[baseline] b_loss: {}".format(bl))
+            
 
         #====================================================================================#
         #                           ----------SECTION 4----------
@@ -561,7 +580,6 @@ def main():
     seed = args.seed
     for e in range(args.n_experiments):
         #seed = args.seed + 10*e
-        seed = (seed * 1772742 + e * 22774) % 100000
         print('Running experiment with seed %d'%seed)
         def train_func():
             train_PG(
@@ -581,6 +599,7 @@ def main():
                 n_layers=args.n_layers,
                 size=args.size
                 )
+        seed = (seed * 1772742 + e * 22774) % 100000
         # Awkward hacky process runs, because Tensorflow does not like
         # repeatedly calling train_PG in the same thread.
         p = Process(target=train_func, args=tuple())
