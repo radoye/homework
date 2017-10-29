@@ -91,6 +91,7 @@ def train_PG(exp_name='',
              logdir=None, 
              normalize_advantages=True,
              nn_baseline=False, 
+             no_stepping=False,
              seed=0,
              # network arguments
              n_layers=1,
@@ -162,6 +163,8 @@ def train_PG(exp_name='',
         sy_ac_na = tf.placeholder(shape=[None, ac_dim], name="ac", dtype=tf.float32) 
 
     # Define a placeholder for advantages
+    # advantage is for the whole action? or for each component of the action?
+    # probably whole actions, unless we assume some kind of independence of components?
     sy_adv_n = tf.placeholder(shape=[None], name="adv", dtype=tf.float32)
 
 
@@ -210,7 +213,8 @@ def train_PG(exp_name='',
         
         # (1)
         # our network proposes log probabilities
-        sy_logits_na = build_mlp(sy_ob_no, ac_dim, "policy_d", size=32, n_layers=3)
+        # size=32, n_layers=3 works
+        sy_logits_na = build_mlp(sy_ob_no, ac_dim, "policy_d", size=size, n_layers=n_layers)
 
         # (3)
         # now we must calculate based on what the sim actually performed
@@ -245,15 +249,17 @@ def train_PG(exp_name='',
         # 20th minute in the lecture:
         # https://www.youtube.com/watch?v=tWNpiNzWuO8&index=4&list=PLkFD6_40KJIznC9CDbVTjAF2oyt8_VAe3
 
-        sy_mean = build_mlp(sy_ob_no, ac_dim, "policy_c", size=64, n_layers=2, activation=tf.nn.tanh)
+        # size=64, n_layers=2 works
+        sy_mean = build_mlp(sy_ob_no, ac_dim, "policy_c", size=size, n_layers=n_layers, activation=tf.nn.tanh)
         # logstd should just be a trainable variable not a network output.
-        sy_logstd = tf.get_variable("sy_logstd", shape=[], dtype=tf.float32)
+        sy_logstd = tf.get_variable("sy_logstd", shape=[ac_dim], dtype=tf.float32)
         sy_sampled_ac = sy_mean + tf.exp(sy_logstd) * tf.random_normal([ac_dim], 0.0, 1.0)
         # Hint: Use the log probability under a multivariate gaussian. 
         sy_diff_n = sy_mean - sy_ac_na
-        sy_logprob_n = 0.5*tf.exp(-sy_logstd) * tf.squeeze(tf.square(sy_diff_n))
+        sy_logprob_n = tf.reduce_sum(0.5*tf.exp(-sy_logstd) * tf.square(sy_diff_n), axis=1)
 
         report("sy_mean", sy_mean)
+        report("sy_logstd", sy_logstd)
         report("sy_sampled_ac", sy_sampled_ac)
         report("sy_diff_n", sy_diff_n)
         report("sy_logprob_n", sy_logprob_n)
@@ -275,6 +281,7 @@ def train_PG(exp_name='',
     sy_lr = tf.placeholder(dtype=tf.float32, shape=(), name="lr")
     update_op = tf.train.AdamOptimizer(sy_lr).minimize(loss)
 
+    report("sy_adv_n", sy_adv_n)
     report("loss", loss)
 
     #========================================================================================#
@@ -297,7 +304,7 @@ def train_PG(exp_name='',
         # https://www.youtube.com/watch?v=PpVhtJn-iZI&t=1223s&index=5&list=PLkFD6_40KJIznC9CDbVTjAF2oyt8_VAe3
         sy_b_target = tf.placeholder(shape=[None], name="target", dtype=tf.float32)
         b_loss = tf.losses.mean_squared_error(labels=sy_b_target, predictions=baseline_prediction)
-        b_lr = 2e-3
+        b_lr = 3e-3
         baseline_update_op = tf.train.AdamOptimizer(b_lr).minimize(b_loss)
 
     #========================================================================================#
@@ -316,6 +323,7 @@ def train_PG(exp_name='',
 
     total_timesteps = 0
 
+
     for itr in range(n_iter):
 
         # a bit of lr scheduling to test
@@ -330,6 +338,8 @@ def train_PG(exp_name='',
         else:
             current_lr = learning_rate / 16.0
 
+        if no_stepping:
+            current_lr = learning_rate
             
         print("********** Iteration %i ************"%itr)
 
@@ -560,12 +570,13 @@ def main():
     parser.add_argument('--ep_len', '-ep', type=int, default=-1)
     parser.add_argument('--learning_rate', '-lr', type=float, default=5e-3)
     parser.add_argument('--reward_to_go', '-rtg', action='store_true')
+    parser.add_argument('--no_stepping', action='store_true')
     parser.add_argument('--dont_normalize_advantages', '-dna', action='store_true')
     parser.add_argument('--nn_baseline', '-bl', action='store_true')
     parser.add_argument('--seed', type=int, default=1)
     parser.add_argument('--n_experiments', '-e', type=int, default=1)
-    parser.add_argument('--n_layers', '-l', type=int, default=1)
-    parser.add_argument('--size', '-s', type=int, default=32)
+    parser.add_argument('--n_layers', '-l', type=int, default=2)
+    parser.add_argument('--size', '-s', type=int, default=64)
     args = parser.parse_args()
 
     if not(os.path.exists('data')):
@@ -579,7 +590,8 @@ def main():
 
     seed = args.seed
     for e in range(args.n_experiments):
-        #seed = args.seed + 10*e
+        #seed = (seed * 1772742 + e * 22774) % 100000
+        seed = args.seed + 10*e
         print('Running experiment with seed %d'%seed)
         def train_func():
             train_PG(
@@ -597,9 +609,9 @@ def main():
                 nn_baseline=args.nn_baseline, 
                 seed=seed,
                 n_layers=args.n_layers,
-                size=args.size
+                size=args.size,
+                no_stepping=args.no_stepping
                 )
-        seed = (seed * 1772742 + e * 22774) % 100000
         # Awkward hacky process runs, because Tensorflow does not like
         # repeatedly calling train_PG in the same thread.
         p = Process(target=train_func, args=tuple())
