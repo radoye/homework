@@ -253,15 +253,17 @@ def train_PG(exp_name='',
         sy_mean = build_mlp(sy_ob_no, ac_dim, "policy_c", size=size, n_layers=n_layers, activation=tf.nn.tanh)
         # logstd should just be a trainable variable not a network output.
         sy_logstd = tf.get_variable("sy_logstd", shape=[ac_dim], dtype=tf.float32)
-        sy_sampled_ac = sy_mean + tf.exp(sy_logstd) * tf.random_normal([ac_dim], 0.0, 1.0)
+        sy_sampled_ac = sy_mean + tf.exp(sy_logstd) * tf.random_normal([ac_dim])#, 0.0, 1.0)
+
         # Hint: Use the log probability under a multivariate gaussian. 
-        sy_diff_n = sy_mean - sy_ac_na
-        sy_logprob_n = tf.reduce_sum(0.5*tf.exp(-sy_logstd) * tf.square(sy_diff_n), axis=1)
+        #sy_diff_n = sy_mean - sy_ac_na
+        #sy_logprob_n = tf.reduce_sum(0.5*tf.exp(-sy_logstd) * tf.square(sy_diff_n), axis=1)
+        sy_mvg = tf.contrib.distributions.MultivariateNormalDiag(sy_mean, tf.exp(sy_logstd))
+        sy_logprob_n = -sy_mvg.log_prob(sy_ac_na)
 
         report("sy_mean", sy_mean)
         report("sy_logstd", sy_logstd)
         report("sy_sampled_ac", sy_sampled_ac)
-        report("sy_diff_n", sy_diff_n)
         report("sy_logprob_n", sy_logprob_n)
     #========================================================================================#
     #                           ----------SECTION 4----------
@@ -275,7 +277,8 @@ def train_PG(exp_name='',
     # Loss function that we'll differentiate to get the policy gradient.
     # e.g. "Example: Gaussian policies" slide
     # http://rll.berkeley.edu/deeprlcourse/f17docs/lecture_4_policy_gradient.pdf
-    sy_logp_rsum = tf.multiply(sy_logprob_n, sy_adv_n)
+    #sy_logp_rsum = tf.multiply(sy_logprob_n, sy_adv_n)
+    sy_logp_rsum = sy_logprob_n * sy_adv_n
     loss = tf.reduce_mean(sy_logp_rsum) 
 
     sy_lr = tf.placeholder(dtype=tf.float32, shape=(), name="lr")
@@ -295,7 +298,8 @@ def train_PG(exp_name='',
                                 1, 
                                 "nn_baseline",
                                 n_layers=n_layers,
-                                size=size))
+                                size=size
+        ))
         # Define placeholders for targets, a loss function and an update op for fitting a 
         # neural network baseline. These will be used to fit the neural network baseline. 
         # YOUR_CODE_HERE
@@ -304,7 +308,7 @@ def train_PG(exp_name='',
         # https://www.youtube.com/watch?v=PpVhtJn-iZI&t=1223s&index=5&list=PLkFD6_40KJIznC9CDbVTjAF2oyt8_VAe3
         sy_b_target = tf.placeholder(shape=[None], name="target", dtype=tf.float32)
         b_loss = tf.losses.mean_squared_error(labels=sy_b_target, predictions=baseline_prediction)
-        b_lr = 3e-3
+        b_lr = 2e-4
         baseline_update_op = tf.train.AdamOptimizer(b_lr).minimize(b_loss)
 
     #========================================================================================#
@@ -443,11 +447,9 @@ def train_PG(exp_name='',
 
         # this is a numeric (numpy) computation (no sym_ prefix)
         if not reward_to_go:
-            print(">>>>> reward_to_go == False")
             q_n = ret([p["reward"] for p in paths], gamma)
 
         else:
-            print(">>>>> reward_to_go == True")
             q_n = rtg([p["reward"] for p in paths], gamma)
 
         #====================================================================================#
@@ -466,9 +468,7 @@ def train_PG(exp_name='',
 
             b_feed = {sy_ob_no: ob_no} 
             b_n_ = sess.run([baseline_prediction], feed_dict = b_feed)[0]
-            print("b_n_ {}".format(b_n_.shape))
             b_n = scale(b_n_, np.mean(q_n), np.std(q_n))
-            print("b_n {}".format(b_n.shape))
             adv_n = q_n - b_n
             # note that b_n(s) while q_n(s,a) so the network will be averaging over the actions!
         else:
@@ -527,7 +527,8 @@ def train_PG(exp_name='',
         # finally we can train the policy network
         feed = {sy_ob_no: ob_no, sy_ac_na: ac_na, sy_adv_n: adv_n, sy_lr: current_lr}
         old_loss = sess.run([loss], feed_dict = feed)[0]
-        _, new_loss = sess.run([update_op, loss], feed_dict = feed)
+        sess.run([update_op, loss], feed_dict = feed)
+        new_loss = sess.run([loss], feed_dict = feed)[0]
 
         # debugging
         #adv, diff, logprob = sess.run([sy_adv_n, sy_diff_n, sy_logprob_n], feed_dict = feed)
