@@ -297,8 +297,8 @@ def train_PG(exp_name='',
                                 sy_ob_no, 
                                 1, 
                                 "nn_baseline",
-                                n_layers=n_layers,
-                                size=size
+                                n_layers=4, #n_layers,
+                                size=16 #size
         ))
         # Define placeholders for targets, a loss function and an update op for fitting a 
         # neural network baseline. These will be used to fit the neural network baseline. 
@@ -308,7 +308,7 @@ def train_PG(exp_name='',
         # https://www.youtube.com/watch?v=PpVhtJn-iZI&t=1223s&index=5&list=PLkFD6_40KJIznC9CDbVTjAF2oyt8_VAe3
         sy_b_target = tf.placeholder(shape=[None], name="target", dtype=tf.float32)
         b_loss = tf.losses.mean_squared_error(labels=sy_b_target, predictions=baseline_prediction)
-        b_lr = 2e-4
+        b_lr = 5e-3
         baseline_update_op = tf.train.AdamOptimizer(b_lr).minimize(b_loss)
 
     #========================================================================================#
