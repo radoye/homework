@@ -91,7 +91,8 @@ def train_PG(exp_name='',
              logdir=None, 
              normalize_advantages=True,
              nn_baseline=False, 
-             no_stepping=False,
+             stepping_lr=1000,
+             step_factor=1.0,
              seed=0,
              # network arguments
              n_layers=1,
@@ -297,8 +298,8 @@ def train_PG(exp_name='',
                                 sy_ob_no, 
                                 1, 
                                 "nn_baseline",
-                                n_layers=4, #n_layers,
-                                size=16 #size
+                                n_layers=n_layers,
+                                size=size
         ))
         # Define placeholders for targets, a loss function and an update op for fitting a 
         # neural network baseline. These will be used to fit the neural network baseline. 
@@ -328,22 +329,14 @@ def train_PG(exp_name='',
     total_timesteps = 0
 
 
+    current_lr = learning_rate
+    lr_stepped = 0
     for itr in range(n_iter):
 
         # a bit of lr scheduling to test
-        if (itr < 15):
-            current_lr = learning_rate
-        elif (itr < 30):
-            current_lr = learning_rate / 2.0
-        elif (itr < 50):
-            current_lr = learning_rate / 4.0
-        elif (itr <= 75):
-            current_lr = learning_rate / 8.0
-        else:
-            current_lr = learning_rate / 16.0
-
-        if no_stepping:
-            current_lr = learning_rate
+        if (itr - lr_stepped >= stepping_lr):
+            lr_stepped = itr
+            current_lr = current_lr * step_factor
             
         print("********** Iteration %i ************"%itr)
 
@@ -571,7 +564,8 @@ def main():
     parser.add_argument('--ep_len', '-ep', type=int, default=-1)
     parser.add_argument('--learning_rate', '-lr', type=float, default=5e-3)
     parser.add_argument('--reward_to_go', '-rtg', action='store_true')
-    parser.add_argument('--no_stepping', action='store_true')
+    parser.add_argument('--stepping_lr', type=int, default=1000)
+    parser.add_argument('--step_factor', type=float, default=1.0)
     parser.add_argument('--dont_normalize_advantages', '-dna', action='store_true')
     parser.add_argument('--nn_baseline', '-bl', action='store_true')
     parser.add_argument('--seed', type=int, default=1)
@@ -611,7 +605,8 @@ def main():
                 seed=seed,
                 n_layers=args.n_layers,
                 size=args.size,
-                no_stepping=args.no_stepping
+                stepping_lr=args.stepping_lr,
+                step_factor=args.step_factor
                 )
         # Awkward hacky process runs, because Tensorflow does not like
         # repeatedly calling train_PG in the same thread.
