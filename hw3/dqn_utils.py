@@ -7,11 +7,9 @@ import random
 
 def huber_loss(x, delta=1.0):
     # https://en.wikipedia.org/wiki/Huber_loss
-    return tf.select(
-        tf.abs(x) < delta,
-        tf.square(x) * 0.5,
-        delta * (tf.abs(x) - 0.5 * delta)
-    )
+    return tf.select(tf.abs(x) < delta,
+                     tf.square(x) * 0.5,
+                     delta * (tf.abs(x) - 0.5 * delta))
 
 def sample_n_unique(sampling_f, n):
     """Helper function. Given a function `sampling_f` that returns

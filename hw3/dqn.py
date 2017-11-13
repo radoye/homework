@@ -15,7 +15,7 @@ def report(tag, tsr):
 
 def q_vals(q, act, num_actions):
     act_idx = tf.one_hot(act, depth = num_actions)
-    return tf.multiply(q, act_idx)
+    return tf.reduce_sum(tf.multiply(q, act_idx), axis=1)
 
 def learn(env,
           q_func,
@@ -165,7 +165,8 @@ def learn(env,
     report("y_i", y_i)
     report("act_t_ph", act_t_ph)
 
-    total_error = tf.reduce_mean(tf.reduce_sum(q_vals(q_phi, act_t_ph, num_actions)) - y_i)
+    diffs = q_vals(q_phi, act_t_ph, num_actions) - tf.stop_gradient(y_i)
+    total_error = 0.5 * tf.square(diffs)
     report("total_error", total_error)
     
     ######
