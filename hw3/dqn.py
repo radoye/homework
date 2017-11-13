@@ -10,6 +10,13 @@ from dqn_utils import *
 
 OptimizerSpec = namedtuple("OptimizerSpec", ["constructor", "kwargs", "lr_schedule"])
 
+def report(tag, tsr):
+    print("[{}] {} : {}".format(tag, tsr.name, tsr.get_shape()))
+
+def q_vals(q, act, num_actions):
+    act_idx = tf.one_hot(act, depth = num_actions)
+    return tf.multiply(q, act_idx)
+
 def learn(env,
           q_func,
           optimizer_spec,
@@ -90,6 +97,11 @@ def learn(env,
     num_actions = env.action_space.n
 
     # set up placeholders
+    #
+    # https://youtu.be/nZXC5OdDfs4?list=PLkFD6_40KJIznC9CDbVTjAF2oyt8_VAe3&t=1331
+    # "classic" step 1:
+    #  - (s_i, a_i, s_i', r_i) step
+    
     # placeholder for current observation (or state)
     obs_t_ph              = tf.placeholder(tf.uint8, [None] + list(input_shape))
     # placeholder for current action
@@ -129,9 +141,37 @@ def learn(env,
     
     # YOUR CODE HERE
 
+    # Bellman error (Q_{\phi}(s_i,a_i) - y_i) in
+    # https://youtu.be/nZXC5OdDfs4?list=PLkFD6_40KJIznC9CDbVTjAF2oyt8_VAe3&t=1331
+
+    # NOTE: as set up, the Q_net here will calculate Q_val(s_i) -> R^num_actions
+    #       instead of Q_val(s_i, a_i) -> R^1
+
+    q_phi = q_func(obs_t_float, num_actions, scope="q_func", reuse=False)
+    q_func_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="q_func")
+
+    target_q_phi = q_func(obs_tp1_float, num_actions, scope="target_q_func", reuse=False)
+    target_q_func_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="target_q_func")
+
+    max_target_q_phi = tf.reduce_max(target_q_phi, axis=1)
+    max_arg_tq = tf.argmax(target_q_phi, axis=1)
+
+    report("q_phi", q_phi)
+    report("target_q_phi", target_q_phi)
+    report("max_target_q_phi", max_target_q_phi)
+    report("max_arg_tq", max_arg_tq)
+
+    y_i = rew_t_ph + gamma * max_target_q_phi
+    report("y_i", y_i)
+    report("act_t_ph", act_t_ph)
+
+    total_error = tf.reduce_sum(q_vals(q_phi, act_t_ph, num_actions)) - y_i
+    report("total_error", total_error)
+    
     ######
 
     # construct optimization op (with gradient clipping)
+    # !?! why clipping? bellman error being quadratic?
     learning_rate = tf.placeholder(tf.float32, (), name="learning_rate")
     optimizer = optimizer_spec.constructor(learning_rate=learning_rate, **optimizer_spec.kwargs)
     train_fn = minimize_and_clip(optimizer, total_error,
@@ -196,6 +236,31 @@ def learn(env,
         
         # YOUR CODE HERE
 
+        # pick e-greedy action
+        eps = exploration.value(t) # epsilon for this step
+        idx = replay_buffer.store_frame(last_obs)
+        recent_obs = replay_buffer.encode_recent_observation()
+
+        if model_initialized:
+            max_action = session.run([max_arg_tq], feed_dict={obs_tp1_ph: [recent_obs]})
+        else:
+            max_action = np.random.choice(range(num_actions))
+
+        action_probs = eps * np.ones(num_actions) / num_actions
+        action_probs[max_action] += 1 - eps
+
+        action = np.random.choice(range(num_actions), p=action_probs)
+
+        # step the simulator
+        obs, reward, done, info = env.step(action)
+        # store new transition
+        replay_buffer.store_effect(idx, action, reward, done)
+
+        if done:
+            obs = env.reset()
+
+        last_obs = obs
+
         #####
 
         # at this point, the environment should have been advanced one step (and
@@ -245,6 +310,33 @@ def learn(env,
             #####
             
             # YOUR CODE HERE
+
+            # 3.a
+            obs_batch, act_batch, rew_batch, next_obs_batch, done_batch = replay_buffer.sample(batch_size)
+
+            # 3.b
+            if not model_initialized:
+                print("INITIALIZING ...")
+                initialize_interdependent_variables(session, tf.global_variables(),
+                                                    {obs_t_ph: obs_t_batch,
+                                                     obs_tp1_ph: obs_tp1_batch
+                                                     })
+                model_initialized = True
+
+            # 3.c
+            _ = session.run([train_fn], feed_dict = {
+                obs_t_ph: obs_batch,
+                act_t_ph: act_batch,
+                rew_t_ph: rew_batch,
+                obs_tp1_ph: next_obs_batch,
+                done_mask_ph: done_batch,
+                learning_rate: optimizer_spec.lr_schedule.value(t)})
+
+            # 3.d
+            if (t - num_param_updates * target_update_freq >= target_update_freq):
+                num_param_updates += 1
+                
+                session.run(update_target_fn)
 
             #####
 
