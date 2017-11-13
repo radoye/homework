@@ -311,10 +311,12 @@ def learn(env,
             
             # YOUR CODE HERE
 
+            # 3.a
+            obs_batch, act_batch, rew_batch, next_obs_batch, done_batch = replay_buffer.sample(batch_size)
+
             # 3.b
             if not model_initialized:
                 print("INITIALIZING ...")
-                obs_batch, act_batch, rew_batch, next_obs_batch, done_batch = replay_buffer.sample(batch_size)
                 initialize_interdependent_variables(session, tf.global_variables(),
                                                     {obs_t_ph: obs_batch,
                                                      obs_tp1_ph: next_obs_batch
@@ -322,21 +324,13 @@ def learn(env,
                 model_initialized = True
 
             # 3.c
-            nnn = 1
-            for itr in range(nnn):
-                # 3.a
-                obs_batch, act_batch, rew_batch, next_obs_batch, done_batch = replay_buffer.sample(batch_size)
-
-                be_,_ = session.run([total_error, train_fn], feed_dict = {
+            be_,_ = session.run([total_error, train_fn], feed_dict = {
                     obs_t_ph: obs_batch,
                     act_t_ph: act_batch,
                     rew_t_ph: rew_batch,
                     obs_tp1_ph: next_obs_batch,
                     done_mask_ph: done_batch,
                     learning_rate: optimizer_spec.lr_schedule.value(t)})
-
-                if (itr % (nnn // 10) == 0):
-                    print("[itr {}] Bellman error: {}".format(itr,be_))
 
             # 3.d
             if (t - num_param_updates * target_update_freq >= target_update_freq):
