@@ -156,17 +156,17 @@ def learn(env,
     max_target_q_phi = tf.reduce_max(target_q_phi, axis=1)
     max_arg_tq = tf.argmax(target_q_phi, axis=1)
 
+    y_i = rew_t_ph + gamma * max_target_q_phi * (1 - done_mask_ph)
+    diffs = q_vals(q_phi, act_t_ph, num_actions) - tf.stop_gradient(y_i)
+    total_error = 0.5 * tf.square(diffs)
+    # NOTE: limiting of grad achieves huber_loss (almost)
+
     report("q_phi", q_phi)
     report("target_q_phi", target_q_phi)
     report("max_target_q_phi", max_target_q_phi)
     report("max_arg_tq", max_arg_tq)
-
-    y_i = rew_t_ph + gamma * max_target_q_phi
     report("y_i", y_i)
     report("act_t_ph", act_t_ph)
-
-    diffs = q_vals(q_phi, act_t_ph, num_actions) - tf.stop_gradient(y_i)
-    total_error = 0.5 * tf.square(diffs)
     report("total_error", total_error)
     
     ######
@@ -322,6 +322,7 @@ def learn(env,
                                                     {obs_t_ph: obs_batch,
                                                      obs_tp1_ph: next_obs_batch
                                                      })
+                session.run(update_target_fn) # optional?
                 model_initialized = True
 
             # 3.c
@@ -336,7 +337,6 @@ def learn(env,
             # 3.d
             if (t - num_param_updates * target_update_freq >= target_update_freq):
                 num_param_updates += 1
-                
                 session.run(update_target_fn)
 
             #####
