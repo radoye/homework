@@ -7,6 +7,7 @@ import os
 import time
 import inspect
 from multiprocessing import Process
+import IPython
 
 #============================================================================================#
 # Utilities
@@ -22,7 +23,9 @@ def discounts(n, gamma=1.0):
     return np.power(gamma, range(n))
 
 def ret(rs, gamma=1.0):
-    vals = [[np.dot(r, discounts(len(r), gamma))]*len(r) for r in rs]
+    vals = np.array([])
+    for r in rs:
+        vals = np.append(vals, np.array([np.dot(r, discounts(len(r), gamma))]*len(r)))
     return np.array(vals).flatten()
 
 def rtg(rs, gamma=1.0):
@@ -160,6 +163,7 @@ def train_PG(exp_name='',
     if discrete:
         sy_ac_na = tf.placeholder(shape=[None], name="ac", dtype=tf.int32) 
         # WARN: why is it not [None, ac_dim]? this violates the convention _na above!
+        #       they seem to treat ac_dim = 2 as a case of ac_dim = 1 with 0/1 being actions
     else:
         sy_ac_na = tf.placeholder(shape=[None, ac_dim], name="ac", dtype=tf.float32) 
 
@@ -463,9 +467,12 @@ def train_PG(exp_name='',
             b_n_ = sess.run([baseline_prediction], feed_dict = b_feed)[0]
             b_n = scale(b_n_, np.mean(q_n), np.std(q_n))
             adv_n = q_n - b_n
+
+            #print("Using nn_baseline; adv_n.shape = {}".format(adv_n.shape))
             # note that b_n(s) while q_n(s,a) so the network will be averaging over the actions!
         else:
             adv_n = q_n.copy()
+            #print("NO nn_baseline; adv_n.shape = {}".format(adv_n.shape))
 
         #====================================================================================#
         #                           ----------SECTION 4----------
@@ -519,6 +526,14 @@ def train_PG(exp_name='',
 
         # finally we can train the policy network
         feed = {sy_ob_no: ob_no, sy_ac_na: ac_na, sy_adv_n: adv_n, sy_lr: current_lr}
+
+        #report("sy_ob_no " + str(ob_no.shape), sy_ob_no)
+        #report("sy_ac_na " + str(ac_na.shape), sy_ac_na)
+        #report("sy_adv_n " + str(adv_n.shape), sy_adv_n)
+        #report("sy_lr (float)", sy_lr)
+
+        #print(adv_n)
+
         old_loss = sess.run([loss], feed_dict = feed)[0]
         sess.run([update_op, loss], feed_dict = feed)
         new_loss = sess.run([loss], feed_dict = feed)[0]
